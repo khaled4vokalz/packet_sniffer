@@ -14,6 +14,23 @@ type EthernetFrame struct {
 	EtherType      uint16
 }
 
+type IPPacket struct {
+	Version        uint8
+	IHL            uint8 // Internet Header Length
+	TTL            uint8 // Time To Live
+	Protocol       IPProtocol
+	SourceIP       string
+	DestinationIP  string
+}
+
+type IPProtocol uint8 
+
+const (
+	IPProtocolICMP IPProtocol = 1
+	IPProtocolTCP  IPProtocol = 6
+	IPProtocolUDP  IPProtocol = 17
+)
+
 func printDevices(devices []pcap.Interface) {
 	fmt.Println("Available network interfaces:")
 	fmt.Println("==============================")
@@ -84,11 +101,27 @@ func main() {
 				continue
 			}
 			fmt.Printf("Packet #%d:\n", packetCount)
-		  fmt.Printf("Raw bytes (first 64): %x\n", truncateBytes(packet.Data(), 0, 64))
+		  fmt.Printf("Raw bytes (first 64): %x\n", truncateBytes(packet.Data(), 0, len(packet.Data())))
 			fmt.Printf("Destination MAC: %s\n", ethernetFrame.DestinationMAC)
 			fmt.Printf("Source MAC: %s\n", ethernetFrame.SourceMAC)
 			fmt.Printf("EtherType: 0x%04x\n", ethernetFrame.EtherType)
 			fmt.Println()
+
+			// IPv4
+			if ethernetFrame.EtherType == 0x0800 {
+				ipPacket, err := parseIP(truncateBytes(packet.Data(), 14, len(packet.Data())))
+				if err != nil {
+					fmt.Println("Error parsing IP packet:", err)
+					continue
+				}
+				fmt.Printf("  IP Version: %d\n", ipPacket.Version)
+				fmt.Printf("  IHL: %d\n", ipPacket.IHL)
+				fmt.Printf("  TTL: %d\n", ipPacket.TTL)
+				fmt.Printf("  Protocol: %s (%d)\n", getIPProtocolName(ipPacket.Protocol), ipPacket.Protocol)
+				fmt.Printf("  Source IP: %s\n", ipPacket.SourceIP)
+				fmt.Printf("  Destination IP: %s\n", ipPacket.DestinationIP)
+				fmt.Println()
+			}
 		}
 
 		// Stop after capturing 10 packets for demonstration purposes
@@ -96,6 +129,38 @@ func main() {
 			fmt.Println("Captured 10 packets, stopping.")
 			break
 		}
+	}
+}
+
+func parseIP(data []byte) (*IPPacket, error) {
+	if len(data) < 20 {
+		return nil, fmt.Errorf("data too short to be an IP packet")
+	}
+	packet := &IPPacket{
+		Version:       data[0] >> 4,
+		IHL:           data[0] & 0x0F,
+		TTL:           data[8],
+		Protocol:      parseIPProtocol(data[9]),
+		SourceIP:      fmt.Sprintf("%d.%d.%d.%d", data[12], data[13], data[14], data[15]),
+		DestinationIP: fmt.Sprintf("%d.%d.%d.%d", data[16], data[17], data[18], data[19]),
+	}
+	return packet, nil
+}
+
+func parseIPProtocol(proto byte) IPProtocol {
+	return IPProtocol(proto)
+}
+
+func getIPProtocolName(proto IPProtocol) string {
+	switch proto {
+	case IPProtocolICMP:
+		return "ICMP"
+	case IPProtocolTCP:
+		return "TCP"
+	case IPProtocolUDP:
+		return "UDP"
+	default:
+		return "Unknown"
 	}
 }
 
@@ -119,8 +184,5 @@ func parseEthernet(data []byte) (*EthernetFrame, error) {
 }
 
 func truncateBytes(data []byte, start int, end int) []byte {
-	if len(data) > end {
-		return data[start:end]
-	}
-	return data
+	return data[start:end]
 }
