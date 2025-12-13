@@ -14,9 +14,8 @@ A learning project to understand networking from the ground up by building a pac
 - [x] Capture raw packets from network interface
 - [x] Parse Ethernet frames (MAC addresses, EtherType)
 - [x] Parse IP packets (version, TTL, protocol, IP addresses)
-- [ ] Parse TCP segments (ports, flags, sequence numbers)
-- [ ] Parse UDP datagrams
-- [ ] Pretty print packet information
+- [x] Parse TCP segments (ports, flags, sequence numbers)
+- [x] Parse UDP datagrams
 
 ## Packet Layers
 
@@ -27,20 +26,19 @@ A learning project to understand networking from the ground up by building a pac
 │  - Source MAC (6 bytes)                          │
 │  - EtherType (2 bytes)                           │
 ├──────────────────────────────────────────────────┤
-│ IP Packet [next (Header Length * 4) bytes]       │────┐
-│  - Version, Header Length                        │    │
-│  - TTL, Protocol                                 │    │
-│  - Source/Destination IP                         │    │
-├──────────────────────────────────────────────────┤    │
-│ TCP/UDP                                          │    │
-│  - Source/Destination Port                       │    │
-│  - Sequence/Ack numbers (TCP)                    │    │
-│  - Flags (TCP)                                   │    │
-├──────────────────────────────────────────────────┤    │
-│ Application Data (HTTP, etc.)                    │    │
-└──────────────────────────────────────────────────┘    │
-                                                        │
-                                                        ▼
+│ IP Packet [next (Header Length * 4) bytes]       │
+│  - Version, Header Length                        │
+│  - TTL, Protocol                                 │
+│  - Source/Destination IP                         │
+├──────────────────────────────────────────────────┤
+│ TCP/UDP                                          │
+│  - Source/Destination Port                       │
+│  - Sequence/Ack numbers (TCP)                    │
+│  - Flags (TCP)                                   │
+├──────────────────────────────────────────────────┤
+│ Application Data (HTTP, etc.)                    │
+└──────────────────────────────────────────────────┘
+
 IPv4 Header Structure (IP Packet):
 
   0                   1                   2                   3
@@ -56,6 +54,33 @@ IPv4 Header Structure (IP Packet):
 ├───────────────────────────────────────────────────────────────┤
 │                    Destination IP Address                     │  Bytes 16-19
 └───────────────────────────────────────────────────────────────┘
+
+
+UDP Header (simpler, start with this since you captured UDP):
+
+  0                   1                   2                   3
+  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+├─────────────────────────────┬─────────────────────────────────┤
+│         Source Port         │       Destination Port          │  Bytes 0-3
+├─────────────────────────────┼─────────────────────────────────┤
+│           Length            │           Checksum              │  Bytes 4-7
+└─────────────────────────────┴─────────────────────────────────┘
+
+TCP Header (more complex):
+
+  0                   1                   2                   3
+  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+├─────────────────────────────┬─────────────────────────────────┤
+│         Source Port         │       Destination Port          │  Bytes 0-3
+├─────────────────────────────┴─────────────────────────────────┤
+│                        Sequence Number                        │  Bytes 4-7
+├───────────────────────────────────────────────────────────────┤
+│                     Acknowledgment Number                     │  Bytes 8-11
+├───────┬───────┬─┬─┬─┬─┬─┬─┬───────────────────────────────────┤
+│DataOff│  Res  │C│E│U│A│P│R│S│F│          Window Size          │  Bytes 12-15
+│(4bits)│       │W│C│R│C│S│S│Y│I│                               │
+│       │       │R│E│G│K│H│T│N│N│                               │
+└───────┴───────┴─┴─┴─┴─┴─┴─┴─┴─┴───────────────────────────────┘
 ```
 
 ## Running

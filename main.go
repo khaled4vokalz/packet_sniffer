@@ -23,8 +23,22 @@ type IPPacket struct {
 	DestinationIP  string
 }
 
-type IPProtocol uint8 
+type UDPSegment struct {
+	SourcePort      uint16
+	DestinationPort uint16
+	Length          uint16
+	Checksum        uint16
+}
 
+type TCPSegment struct {
+	SourcePort      uint16
+	DestinationPort uint16
+	SequenceNumber  uint32
+	AckNumber       uint32
+	Flags           uint16 // e.g., SYN, ACK, SYN-ACK, FIN
+}
+
+type IPProtocol uint8 
 const (
 	IPProtocolICMP IPProtocol = 1
 	IPProtocolTCP  IPProtocol = 6
@@ -94,34 +108,67 @@ func main() {
 		// fmt.Printf("Length: %d bytes\n", len(packet.Data()))
 		// fmt.Printf("Raw bytes (first 64): %x\n", truncateBytes(packet.Data(), 0, 64))
 		// fmt.Println()
-		if len(packet.Data()) >= 14 {
-			ethernetFrame, err := parseEthernet(truncateBytes(packet.Data(), 0, 14))
+
+		if len(packet.Data()) < 14 {
+			continue
+		}
+
+		ethernetFrame, err := parseEthernet(getEthernetHeaderSlice(packet.Data()))
+		if err != nil {
+			fmt.Println("Error parsing Ethernet frame:", err)
+			continue
+		}
+
+		fmt.Printf("Packet #%d:\n", packetCount)
+		fmt.Printf("Destination MAC: %s\n", ethernetFrame.DestinationMAC)
+		fmt.Printf("Source MAC: %s\n", ethernetFrame.SourceMAC)
+		fmt.Printf("EtherType: 0x%04x\n", ethernetFrame.EtherType)
+		fmt.Println()
+
+		if !isIPV4(ethernetFrame.EtherType) {
+			continue
+		}
+
+		ipPacket, err := parseIP(getIPHeaderSlice(packet.Data()))
+		if err != nil {
+			fmt.Println("Error parsing IP packet:", err)
+			continue
+		}
+
+		fmt.Printf("  IP Version: %d\n", ipPacket.Version)
+		fmt.Printf("  IHL: %d\n", ipPacket.IHL)
+		fmt.Printf("  TTL: %d\n", ipPacket.TTL)
+		fmt.Printf("  Protocol: %s (%d)\n", getIPProtocolName(ipPacket.Protocol), ipPacket.Protocol)
+		fmt.Printf("  Source IP: %s\n", ipPacket.SourceIP)
+		fmt.Printf("  Destination IP: %s\n", ipPacket.DestinationIP)
+		fmt.Println()
+
+		tcp_udp_slice := getProtocolHeaderSlice(packet.Data(), int(ipPacket.IHL))
+		if ipPacket.Protocol == IPProtocolTCP {
+			tcpSegment, err := parseTCP(tcp_udp_slice)
 			if err != nil {
-				fmt.Println("Error parsing Ethernet frame:", err)
+				fmt.Println("Error parsing TCP segment:", err)
 				continue
 			}
-			fmt.Printf("Packet #%d:\n", packetCount)
-		  fmt.Printf("Raw bytes (first 64): %x\n", truncateBytes(packet.Data(), 0, len(packet.Data())))
-			fmt.Printf("Destination MAC: %s\n", ethernetFrame.DestinationMAC)
-			fmt.Printf("Source MAC: %s\n", ethernetFrame.SourceMAC)
-			fmt.Printf("EtherType: 0x%04x\n", ethernetFrame.EtherType)
+			fmt.Printf("    TCP Source Port: %d\n", tcpSegment.SourcePort)
+			fmt.Printf("    TCP Destination Port: %d\n", tcpSegment.DestinationPort)
+			fmt.Printf("    TCP Sequence Number: %d\n", tcpSegment.SequenceNumber)
+			fmt.Printf("    TCP Acknowledgment Number: %d\n", tcpSegment.AckNumber)
+			fmt.Printf("    TCP Flags: %s\n", getTCPFlagNames(tcpSegment.Flags))
 			fmt.Println()
-
-			// IPv4
-			if ethernetFrame.EtherType == 0x0800 {
-				ipPacket, err := parseIP(truncateBytes(packet.Data(), 14, len(packet.Data())))
-				if err != nil {
-					fmt.Println("Error parsing IP packet:", err)
-					continue
-				}
-				fmt.Printf("  IP Version: %d\n", ipPacket.Version)
-				fmt.Printf("  IHL: %d\n", ipPacket.IHL)
-				fmt.Printf("  TTL: %d\n", ipPacket.TTL)
-				fmt.Printf("  Protocol: %s (%d)\n", getIPProtocolName(ipPacket.Protocol), ipPacket.Protocol)
-				fmt.Printf("  Source IP: %s\n", ipPacket.SourceIP)
-				fmt.Printf("  Destination IP: %s\n", ipPacket.DestinationIP)
-				fmt.Println()
+		} else if ipPacket.Protocol == IPProtocolUDP {
+			udpSegment, err := parseUDP(tcp_udp_slice)
+			if err != nil {
+				fmt.Println("Error parsing UDP segment:", err)
+				continue
 			}
+			fmt.Printf("    UDP Source Port: %d\n", udpSegment.SourcePort)
+			fmt.Printf("    UDP Destination Port: %d\n", udpSegment.DestinationPort)
+			fmt.Printf("    UDP Length: %d\n", udpSegment.Length)
+			fmt.Println()
+		} else {
+			fmt.Println("    Unsupported IP protocol, skipping TCP/UDP parsing.")
+			fmt.Println()
 		}
 
 		// Stop after capturing 10 packets for demonstration purposes
@@ -130,6 +177,58 @@ func main() {
 			break
 		}
 	}
+}
+
+func isIPV4(etherType uint16) bool {
+	return etherType == 0x0800
+}
+
+// first 14 bytes are Ethernet header
+func getEthernetHeaderSlice(data []byte) []byte {
+	return sliceBytes(data, 0, 14)
+}
+
+// bytes after first 14 bytes are IP header and payload
+func getIPHeaderSlice(data []byte) []byte {
+	return sliceBytes(data, 14, len(data))
+}
+
+// bytes after first 14 + ipHeaderLength*4 bytes are TCP/UDP header and payload
+func getProtocolHeaderSlice(data []byte, ipHeaderLength int) []byte {
+	return sliceBytes(data, 14+ipHeaderLength*4, len(data))
+}
+
+func parseTCP(data []byte) (*TCPSegment, error) {
+	if len(data) < 20 {
+		return nil, fmt.Errorf("data too short to be a TCP segment")
+	}
+	// ports -> 2 bytes (each, thus bit shifted by 8,0)
+	// sequence/ack number -> 4 bytes (thus bit sfhifted by 24,16,8,0)
+	// flags -> 2 bytes (data offset + reserved + flags)
+	segment := &TCPSegment{
+		SourcePort:      uint16(data[0])<<8 | uint16(data[1]),
+		DestinationPort: uint16(data[2])<<8 | uint16(data[3]),
+		SequenceNumber:  uint32(data[4])<<24 | uint32(data[5])<<16 | uint32(data[6])<<8 | uint32(data[7]),
+		AckNumber:       uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11]),
+		Flags:           uint16(data[13]), // skipping the NS (nonce sum) flag for now
+	}
+	return segment, nil
+}
+
+func parseUDP(data []byte) (*UDPSegment, error) {
+	if len(data) < 8 {
+		return nil, fmt.Errorf("data too short to be a UDP segment")
+	}
+
+	// we need to shift the bits here as the resulting data should be 16 bits
+	// without shifting, we would get incorrect 8 bit values
+	segment := &UDPSegment{
+		SourcePort:      uint16(data[0])<<8 | uint16(data[1]),
+		DestinationPort: uint16(data[2])<<8 | uint16(data[3]),
+		Length:          uint16(data[4])<<8 | uint16(data[5]),
+		Checksum:        uint16(data[6])<<8 | uint16(data[7]),
+	}
+	return segment, nil
 }
 
 func parseIP(data []byte) (*IPPacket, error) {
@@ -164,6 +263,29 @@ func getIPProtocolName(proto IPProtocol) string {
 	}
 }
 
+func getTCPFlagNames(flags uint16) []string {
+	var names []string
+	if flags&0x02 != 0 {
+		names = append(names, "SYN")
+	}
+	if flags&0x10 != 0 {
+		names = append(names, "ACK")
+	}
+	if flags&0x01 != 0 {
+		names = append(names, "FIN")
+	}
+	if flags&0x04 != 0 {
+		names = append(names, "RST")
+	}
+	if flags&0x08 != 0 {
+		names = append(names, "PSH")
+	}
+	if flags&0x20 != 0 {
+		names = append(names, "URG")
+	}
+	return names
+}
+
 func parseEthernet(data []byte) (*EthernetFrame, error) {
 	if len(data) < 14 {
 		return nil, fmt.Errorf("data too short to be an Ethernet frame")
@@ -183,6 +305,6 @@ func parseEthernet(data []byte) (*EthernetFrame, error) {
 	return frame, nil
 }
 
-func truncateBytes(data []byte, start int, end int) []byte {
+func sliceBytes(data []byte, start int, end int) []byte {
 	return data[start:end]
 }
